@@ -1,4 +1,3 @@
-
 #[macro_use]
 extern crate serde;
 use candid::{Decode, Encode};
@@ -152,13 +151,15 @@ enum Error {
     NotFound { msg: String },
     InvalidInput { msg: String },
     SystemError { msg: String },
+    AuthorizationError { msg: String },
+    ValidationError { msg: String },
 }
 
 // Helper function to determine pregnancy stage based on EDD
 fn calculate_pregnancy_stage(edd: u64) -> PregnancyStage {
     let now = time();
     let time_diff = if edd > now {
-        edd - now
+        edd - now 
     } else {
         0
     };
@@ -166,21 +167,18 @@ fn calculate_pregnancy_stage(edd: u64) -> PregnancyStage {
     let weeks_to_edd = time_diff / (7 * 24 * 60 * 60 * 1_000_000_000);
     
     match weeks_to_edd {
-        0..=12 => PregnancyStage::ThirdTrimester,
-        13..=26 => PregnancyStage::SecondTrimester,
-        27..=40 => PregnancyStage::FirstTrimester,
-        _ => PregnancyStage::PostPartum,
+        0 => PregnancyStage::PostPartum,
+        1..=13 => PregnancyStage::ThirdTrimester,
+        14..=27 => PregnancyStage::SecondTrimester,
+        _ => PregnancyStage::FirstTrimester,
     }
 }
 
 // Create new mother profile
 #[ic_cdk::update]
 fn create_mother_profile(payload: MotherProfilePayload) -> Result<MotherProfile, Error> {
-    if payload.age < 13 || payload.age > 65 {
-        return Err(Error::InvalidInput {
-            msg: "Invalid age range".to_string(),
-        });
-    }
+    // Validate the payload first
+    validate_mother_profile(&payload)?;
 
     let id = ID_COUNTER
         .with(|counter| {
@@ -253,15 +251,43 @@ fn add_health_record(payload: HealthRecordPayload) -> Result<HealthRecord, Error
 
 // Helper function to analyze health status based on symptoms and vitals
 fn analyze_health_status(record: &HealthRecordPayload) -> HealthStatus {
-    let has_critical_symptoms = record.symptoms.iter().any(|s| 
-        s.contains("severe") || 
-        s.contains("emergency") || 
-        s.contains("critical")
-    );
+    // Parse blood pressure
+    let bp_parts: Vec<&str> = record.blood_pressure.split('/').collect();
+    if bp_parts.len() == 2 {
+        if let (Ok(systolic), Ok(diastolic)) = (
+            bp_parts[0].trim().parse::<i32>(),
+            bp_parts[1].trim().parse::<i32>()
+        ) {
+            // Check for concerning blood pressure
+            if systolic >= 140 || diastolic >= 90 || systolic < 90 || diastolic < 60 {
+                return HealthStatus::Critical;
+            }
+        }
+    }
 
-    if has_critical_symptoms {
+    // Check weight changes
+    if record.weight < 45.0 || record.weight > 100.0 {
+        return HealthStatus::NeedsAttention;
+    }
+
+    // Check symptoms
+    let critical_symptoms = [
+        "severe", "emergency", "critical", "bleeding",
+        "seizure", "unconscious", "fever", "headache"
+    ];
+    
+    let concerning_symptoms = [
+        "nausea", "vomiting", "swelling", "pain",
+        "discomfort", "fatigue", "dizziness"
+    ];
+
+    if record.symptoms.iter().any(|s| 
+        critical_symptoms.iter().any(|cs| s.to_lowercase().contains(cs))
+    ) {
         HealthStatus::Critical
-    } else if !record.symptoms.is_empty() {
+    } else if record.symptoms.iter().any(|s|
+        concerning_symptoms.iter().any(|cs| s.to_lowercase().contains(cs))
+    ) {
         HealthStatus::NeedsAttention
     } else {
         HealthStatus::Normal
@@ -333,5 +359,78 @@ fn get_high_risk_profiles() -> Vec<MotherProfile> {
     })
 }
 
+// Get critical cases
+#[ic_cdk::query]
+fn get_critical_cases() -> Vec<MotherProfile> {
+    PROFILE_STORAGE.with(|storage| {
+        storage
+            .borrow()
+            .iter()
+            .filter(|(_, profile)| matches!(profile.health_status, HealthStatus::Critical))
+            .map(|(_, profile)| profile.clone())
+            .collect()
+    })
+}
+
+// Get upcoming appointments
+#[ic_cdk::query]
+fn get_upcoming_appointments(days: u64) -> Vec<(MotherProfile, HealthRecord)> {
+    let now = time();
+    let target = now + (days * 24 * 60 * 60 * 1_000_000_000);
+    
+    HEALTH_RECORD_STORAGE.with(|record_storage| {
+        PROFILE_STORAGE.with(|profile_storage| {
+            let records = record_storage.borrow();
+            let profiles = profile_storage.borrow();
+            
+            records
+                .iter()
+                .filter(|(_, record)| {
+                    record.next_appointment > now && record.next_appointment <= target
+                })
+                .filter_map(|(_, record)| {
+                    profiles
+                        .get(&record.mother_id)
+                        .map(|profile| (profile.clone(), record.clone()))
+                })
+                .collect()
+        })
+    })
+}
+
 // Export Candid interface
 ic_cdk::export_candid!();
+
+fn validate_mother_profile(payload: &MotherProfilePayload) -> Result<(), Error> {
+    // Validate age
+    if payload.age < 13 || payload.age > 65 {
+        return Err(Error::InvalidInput {
+            msg: "Invalid age range. Must be between 13 and 65".to_string(),
+        });
+    }
+
+    // Validate blood type
+    let valid_blood_types = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
+    if !valid_blood_types.contains(&payload.blood_type.as_str()) {
+        return Err(Error::InvalidInput {
+            msg: "Invalid blood type".to_string(),
+        });
+    }
+
+    // Validate expected delivery date
+    let now = time();
+    if payload.expected_delivery_date <= now {
+        return Err(Error::InvalidInput {
+            msg: "Expected delivery date must be in the future".to_string(),
+        });
+    }
+
+    // Validate emergency contact
+    if payload.emergency_contact.trim().is_empty() {
+        return Err(Error::InvalidInput {
+            msg: "Emergency contact is required".to_string(),
+        });
+    }
+
+    Ok(())
+}
