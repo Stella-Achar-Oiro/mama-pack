@@ -1,3 +1,106 @@
+// Health-related types
+type HealthStatus = variant {
+    Normal;      // Regular health status
+    NeedsAttention;  // Minor concerns present
+    Critical;    // Requires immediate medical attention
+};
+
+type PregnancyStage = variant {
+    FirstTrimester;   // Weeks 1-12
+    SecondTrimester;  // Weeks 13-26
+    ThirdTrimester;   // Weeks 27-40
+    PostPartum;       // After delivery
+};
+
+// Profile-related types
+type MotherProfilePayload = record {
+    name : text;                    // Full name
+    age : nat8;                     // Must be between 13 and 65
+    blood_type : text;              // Valid types: A+, A-, B+, B-, AB+, AB-, O+, O-
+    expected_delivery_date : nat64;  // Unix timestamp in nanoseconds
+    medical_history : vec text;      // List of previous medical conditions
+    emergency_contact : text;        // Phone number or contact information
+};
+
+type MotherProfile = record {
+    id : nat64;                     // Unique identifier
+    name : text;                    // Full name
+    age : nat8;                     // Age in years
+    blood_type : text;              // Blood type
+    expected_delivery_date : nat64;  // Expected delivery date
+    stage : PregnancyStage;         // Current pregnancy stage
+    health_status : HealthStatus;    // Current health status
+    created_at : nat64;             // Profile creation timestamp
+    last_checkup : nat64;           // Last health record timestamp
+    medical_history : vec text;      // Medical history
+    emergency_contact : text;        // Emergency contact info
+};
+
+// Health record types
+type HealthRecordPayload = record {
+    mother_id : nat64;              // Mother's profile ID
+    blood_pressure : text;          // Format: "systolic/diastolic" e.g. "120/80"
+    weight : float32;               // Weight in kilograms
+    symptoms : vec text;            // List of current symptoms
+    notes : text;                   // Additional observations
+    next_appointment : nat64;       // Next appointment timestamp
+};
+
+type HealthRecord = record {
+    id : nat64;                     // Unique record ID
+    mother_id : nat64;              // Reference to mother's profile
+    date : nat64;                   // Record creation timestamp
+    blood_pressure : text;          // Blood pressure reading
+    weight : float32;               // Weight in kg
+    symptoms : vec text;            // Reported symptoms
+    notes : text;                   // Medical notes
+    next_appointment : nat64;       // Next scheduled visit
+    health_status : HealthStatus;   // Assessed health status
+};
+
+// Error handling
+type Error = variant {
+    NotFound : record { msg : text };           // Resource not found
+    InvalidInput : record { msg : text };       // Invalid input data
+    SystemError : record { msg : text };        // Internal system error
+    AuthorizationError : record { msg : text }; // Permission denied
+    ValidationError : record { msg : text };    // Data validation failed
+};
+
+// Service interface
 service : {
-    "greet": (text) -> (text) query;
-}
+    // 1. Profile Management (Start here)
+    // Example: create_mother_profile({
+    //   name = "Jane Doe"; age = 28; blood_type = "O+";
+    //   expected_delivery_date = 1704067200000000000;
+    //   medical_history = vec { "None" };
+    //   emergency_contact = "+1234567890";
+    // })
+    create_mother_profile : (MotherProfilePayload) -> (variant { Ok: MotherProfile; Err: Error });
+    
+    // Get profile by ID (use ID returned from create_mother_profile)
+    get_mother_profile : (nat64) -> (variant { Ok: MotherProfile; Err: Error }) query;
+
+    // 2. Health Records Management
+    // Example: add_health_record({
+    //   mother_id = 0; blood_pressure = "120/80"; weight = 65.5;
+    //   symptoms = vec { "mild nausea"; "fatigue" };
+    //   notes = "Regular checkup";
+    //   next_appointment = 1704067200000000000;
+    // })
+    add_health_record : (HealthRecordPayload) -> (variant { Ok: HealthRecord; Err: Error });
+    
+    // Get all health records for a specific mother using mother_id
+    get_mother_health_records : (nat64) -> (variant { Ok: vec HealthRecord; Err: Error }) query;
+
+    // 3. Risk Monitoring
+    // Get all mothers with critical health status
+    get_critical_cases : () -> (vec MotherProfile) query;
+    
+    // Get all high-risk mother profiles
+    get_high_risk_profiles : () -> (vec MotherProfile) query;
+    
+    // 4. Appointment Management
+    // Get upcoming appointments within specified days (e.g., 7 for next week)
+    get_upcoming_appointments : (nat64) -> (vec record { MotherProfile; HealthRecord }) query;
+};
