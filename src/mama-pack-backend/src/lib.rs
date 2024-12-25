@@ -173,6 +173,19 @@ fn calculate_pregnancy_stage(edd: u64) -> PregnancyStage {
         _ => PregnancyStage::FirstTrimester,
     }
 }
+//Helper functions for code maintanability and reusability
+
+//Generate Unique ID
+fn generate_new_id() -> Result<u64, Error> {
+    ID_COUNTER.with(|counter| {
+        let current_value = *counter.borrow().get();
+        counter
+            .borrow_mut()
+            .set(current_value + 1)
+            .map_err(|_| Error::SystemError { msg: "Failed to increment ID counter".to_string() })
+    })
+}
+//END OF Helper Functions 
 
 // Create new mother profile
 #[ic_cdk::update]
@@ -180,12 +193,7 @@ fn create_mother_profile(payload: MotherProfilePayload) -> Result<MotherProfile,
     // Validate the payload first
     validate_mother_profile(&payload)?;
 
-    let id = ID_COUNTER
-        .with(|counter| {
-            let current_value = *counter.borrow().get();
-            counter.borrow_mut().set(current_value + 1)
-        })
-        .expect("Cannot increment id counter");
+    let id = generate_new_id()?;
 
     let stage = calculate_pregnancy_stage(payload.expected_delivery_date);
     
@@ -220,12 +228,7 @@ fn add_health_record(payload: HealthRecordPayload) -> Result<HealthRecord, Error
         Ok(())
     })?;
 
-    let id = ID_COUNTER
-        .with(|counter| {
-            let current_value = *counter.borrow().get();
-            counter.borrow_mut().set(current_value + 1)
-        })
-        .expect("Cannot increment id counter");
+    let id = generate_new_id()?;
 
     // Determine health status based on symptoms and vitals
     let health_status = analyze_health_status(&payload);
